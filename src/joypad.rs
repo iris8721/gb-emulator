@@ -40,16 +40,15 @@ impl Joypad {
     }
 
     pub fn get_joypad_state(&self, ff00: u8) -> u8 {
-        let mut res = ff00 ^ 0xFF;
+        let mut res = ff00 | 0xCF;
 
-        if (res & 0x10) == 0 {
+        if (ff00 & 0x20) == 0 {
             // Standard buttons (A, B, Select, Start) in upper nibble of state
-            let top = (self.state >> 4) | 0xF0;
-            res &= top;
-        } else if (res & 0x20) == 0 {
+            res &= (self.state >> 4) | 0xF0;
+        }
+        if (ff00 & 0x10) == 0 {
             // Directional buttons in lower nibble of state
-            let bottom = (self.state & 0xF) | 0xF0;
-            res &= bottom;
+            res &= self.state | 0xF0;
         }
         res
     }
