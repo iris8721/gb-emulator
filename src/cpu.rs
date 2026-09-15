@@ -97,7 +97,11 @@ impl Cpu {
 
     pub fn execute_next_opcode(&mut self, mem: &mut Memory) -> u32 {
         let opcode = mem.read_byte(self.pc);
-        self.pc = self.pc.wrapping_add(1);
+        if mem.halt_bug {
+            mem.halt_bug = false;
+        } else {
+            self.pc = self.pc.wrapping_add(1);
+        }
         self.execute_opcode(opcode, mem)
     }
 
@@ -107,7 +111,7 @@ impl Cpu {
             0x00 => 4,
 
             // LD BC,nn
-            0x01 => { let v = self.read_word(mem); self.pc += 2; self.bc.set_reg(v); 12 }
+            0x01 => { let v = self.read_word(mem); self.pc = self.pc.wrapping_add(2); self.bc.set_reg(v); 12 }
             // LD (BC),A
             0x02 => { mem.write_byte(self.bc.reg(), self.af.hi()); 8 }
             // INC BC
@@ -117,7 +121,7 @@ impl Cpu {
             // DEC B
             0x05 => { let v = self.dec_8bit(self.bc.hi()); self.bc.set_hi(v); 4 }
             // LD B,n
-            0x06 => { let n = mem.read_byte(self.pc); self.pc += 1; self.bc.set_hi(n); 8 }
+            0x06 => { let n = mem.read_byte(self.pc); self.pc = self.pc.wrapping_add(1); self.bc.set_hi(n); 8 }
             // RLCA
             0x07 => {
                 let a = self.af.hi();
@@ -130,9 +134,9 @@ impl Cpu {
             }
             // LD (nn),SP
             0x08 => {
-                let addr = self.read_word(mem); self.pc += 2;
+                let addr = self.read_word(mem); self.pc = self.pc.wrapping_add(2);
                 mem.write_byte(addr, self.sp as u8);
-                mem.write_byte(addr + 1, (self.sp >> 8) as u8);
+                mem.write_byte(addr.wrapping_add(1), (self.sp >> 8) as u8);
                 20
             }
             // ADD HL,BC
@@ -146,7 +150,7 @@ impl Cpu {
             // DEC C
             0x0D => { let v = self.dec_8bit(self.bc.lo()); self.bc.set_lo(v); 4 }
             // LD C,n
-            0x0E => { let n = mem.read_byte(self.pc); self.pc += 1; self.bc.set_lo(n); 8 }
+            0x0E => { let n = mem.read_byte(self.pc); self.pc = self.pc.wrapping_add(1); self.bc.set_lo(n); 8 }
             // RRCA
             0x0F => {
                 let a = self.af.hi();
@@ -158,9 +162,9 @@ impl Cpu {
                 4
             }
             // STOP
-            0x10 => { self.pc += 1; 4 }
+            0x10 => { self.pc = self.pc.wrapping_add(1); 4 }
             // LD DE,nn
-            0x11 => { let v = self.read_word(mem); self.pc += 2; self.de.set_reg(v); 12 }
+            0x11 => { let v = self.read_word(mem); self.pc = self.pc.wrapping_add(2); self.de.set_reg(v); 12 }
             // LD (DE),A
             0x12 => { mem.write_byte(self.de.reg(), self.af.hi()); 8 }
             // INC DE
@@ -170,7 +174,7 @@ impl Cpu {
             // DEC D
             0x15 => { let v = self.dec_8bit(self.de.hi()); self.de.set_hi(v); 4 }
             // LD D,n
-            0x16 => { let n = mem.read_byte(self.pc); self.pc += 1; self.de.set_hi(n); 8 }
+            0x16 => { let n = mem.read_byte(self.pc); self.pc = self.pc.wrapping_add(1); self.de.set_hi(n); 8 }
             // RLA
             0x17 => {
                 let a = self.af.hi();
@@ -200,7 +204,7 @@ impl Cpu {
             // DEC E
             0x1D => { let v = self.dec_8bit(self.de.lo()); self.de.set_lo(v); 4 }
             // LD E,n
-            0x1E => { let n = mem.read_byte(self.pc); self.pc += 1; self.de.set_lo(n); 8 }
+            0x1E => { let n = mem.read_byte(self.pc); self.pc = self.pc.wrapping_add(1); self.de.set_lo(n); 8 }
             // RRA
             0x1F => {
                 let a = self.af.hi();
@@ -223,7 +227,7 @@ impl Cpu {
                 8
             }
             // LD HL,nn
-            0x21 => { let v = self.read_word(mem); self.pc += 2; self.hl.set_reg(v); 12 }
+            0x21 => { let v = self.read_word(mem); self.pc = self.pc.wrapping_add(2); self.hl.set_reg(v); 12 }
             // LD (HL+),A
             0x22 => {
                 mem.write_byte(self.hl.reg(), self.af.hi());
@@ -237,7 +241,7 @@ impl Cpu {
             // DEC H
             0x25 => { let v = self.dec_8bit(self.hl.hi()); self.hl.set_hi(v); 4 }
             // LD H,n
-            0x26 => { let n = mem.read_byte(self.pc); self.pc += 1; self.hl.set_hi(n); 8 }
+            0x26 => { let n = mem.read_byte(self.pc); self.pc = self.pc.wrapping_add(1); self.hl.set_hi(n); 8 }
             // DAA
             0x27 => { self.daa(); 4 }
             // JR Z,n
@@ -266,7 +270,7 @@ impl Cpu {
             // DEC L
             0x2D => { let v = self.dec_8bit(self.hl.lo()); self.hl.set_lo(v); 4 }
             // LD L,n
-            0x2E => { let n = mem.read_byte(self.pc); self.pc += 1; self.hl.set_lo(n); 8 }
+            0x2E => { let n = mem.read_byte(self.pc); self.pc = self.pc.wrapping_add(1); self.hl.set_lo(n); 8 }
             // CPL
             0x2F => {
                 self.af.set_hi(!self.af.hi());
@@ -285,7 +289,7 @@ impl Cpu {
                 8
             }
             // LD SP,nn
-            0x31 => { let v = self.read_word(mem); self.pc += 2; self.sp = v; 12 }
+            0x31 => { let v = self.read_word(mem); self.pc = self.pc.wrapping_add(2); self.sp = v; 12 }
             // LD (HL-),A
             0x32 => {
                 mem.write_byte(self.hl.reg(), self.af.hi());
@@ -307,7 +311,7 @@ impl Cpu {
                 12
             }
             // LD (HL),n
-            0x36 => { let n = mem.read_byte(self.pc); self.pc += 1; mem.write_byte(self.hl.reg(), n); 12 }
+            0x36 => { let n = mem.read_byte(self.pc); self.pc = self.pc.wrapping_add(1); mem.write_byte(self.hl.reg(), n); 12 }
             // SCF
             0x37 => {
                 self.set_flag(FLAG_N, false);
@@ -341,7 +345,7 @@ impl Cpu {
             // DEC A
             0x3D => { let v = self.dec_8bit(self.af.hi()); self.af.set_hi(v); 4 }
             // LD A,n
-            0x3E => { let n = mem.read_byte(self.pc); self.pc += 1; self.af.set_hi(n); 8 }
+            0x3E => { let n = mem.read_byte(self.pc); self.pc = self.pc.wrapping_add(1); self.af.set_hi(n); 8 }
             // CCF
             0x3F => {
                 let c = !self.get_flag(FLAG_C);
@@ -419,7 +423,14 @@ impl Cpu {
             0x74 => { mem.write_byte(self.hl.reg(), self.hl.hi()); 8 }
             0x75 => { mem.write_byte(self.hl.reg(), self.hl.lo()); 8 }
             // HALT
-            0x76 => { mem.halted = true; 4 }
+            0x76 => {
+                if !mem.interrupt_master && mem.rom[0xFF0F] & mem.rom[0xFFFF] & 0x1F != 0 {
+                    mem.halt_bug = true;
+                } else {
+                    mem.halted = true;
+                }
+                4
+            }
             0x77 => { mem.write_byte(self.hl.reg(), self.af.hi()); 8 }
 
             // LD A,x
@@ -524,7 +535,7 @@ impl Cpu {
             0xC1 => { let v = self.pop_word(mem); self.bc.set_reg(v); 12 }
             // JP NZ,nn
             0xC2 => {
-                let nn = self.read_word(mem); self.pc += 2;
+                let nn = self.read_word(mem); self.pc = self.pc.wrapping_add(2);
                 if !self.get_flag(FLAG_Z) { self.pc = nn; return 16; }
                 12
             }
@@ -532,7 +543,7 @@ impl Cpu {
             0xC3 => { let nn = self.read_word(mem); self.pc = nn; 16 }
             // CALL NZ,nn
             0xC4 => {
-                let nn = self.read_word(mem); self.pc += 2;
+                let nn = self.read_word(mem); self.pc = self.pc.wrapping_add(2);
                 if !self.get_flag(FLAG_Z) {
                     self.push_word(mem, self.pc);
                     self.pc = nn;
@@ -543,7 +554,7 @@ impl Cpu {
             // PUSH BC
             0xC5 => { let v = self.bc.reg(); self.push_word(mem, v); 16 }
             // ADD A,n
-            0xC6 => { let n = mem.read_byte(self.pc); self.pc += 1; self.add_8bit(n, false); 8 }
+            0xC6 => { let n = mem.read_byte(self.pc); self.pc = self.pc.wrapping_add(1); self.add_8bit(n, false); 8 }
             // RST 00H
             0xC7 => { self.push_word(mem, self.pc); self.pc = 0x00; 16 }
             // RET Z
@@ -558,7 +569,7 @@ impl Cpu {
             0xC9 => { self.pc = self.pop_word(mem); 16 }
             // JP Z,nn
             0xCA => {
-                let nn = self.read_word(mem); self.pc += 2;
+                let nn = self.read_word(mem); self.pc = self.pc.wrapping_add(2);
                 if self.get_flag(FLAG_Z) { self.pc = nn; return 16; }
                 12
             }
@@ -566,7 +577,7 @@ impl Cpu {
             0xCB => { self.execute_extended(mem) }
             // CALL Z,nn
             0xCC => {
-                let nn = self.read_word(mem); self.pc += 2;
+                let nn = self.read_word(mem); self.pc = self.pc.wrapping_add(2);
                 if self.get_flag(FLAG_Z) {
                     self.push_word(mem, self.pc);
                     self.pc = nn;
@@ -576,13 +587,13 @@ impl Cpu {
             }
             // CALL nn
             0xCD => {
-                let nn = self.read_word(mem); self.pc += 2;
+                let nn = self.read_word(mem); self.pc = self.pc.wrapping_add(2);
                 self.push_word(mem, self.pc);
                 self.pc = nn;
                 24
             }
             // ADC A,n
-            0xCE => { let n = mem.read_byte(self.pc); self.pc += 1; self.add_8bit(n, true); 8 }
+            0xCE => { let n = mem.read_byte(self.pc); self.pc = self.pc.wrapping_add(1); self.add_8bit(n, true); 8 }
             // RST 08H
             0xCF => { self.push_word(mem, self.pc); self.pc = 0x08; 16 }
             // RET NC
@@ -597,13 +608,13 @@ impl Cpu {
             0xD1 => { let v = self.pop_word(mem); self.de.set_reg(v); 12 }
             // JP NC,nn
             0xD2 => {
-                let nn = self.read_word(mem); self.pc += 2;
+                let nn = self.read_word(mem); self.pc = self.pc.wrapping_add(2);
                 if !self.get_flag(FLAG_C) { self.pc = nn; return 16; }
                 12
             }
             // CALL NC,nn
             0xD4 => {
-                let nn = self.read_word(mem); self.pc += 2;
+                let nn = self.read_word(mem); self.pc = self.pc.wrapping_add(2);
                 if !self.get_flag(FLAG_C) {
                     self.push_word(mem, self.pc);
                     self.pc = nn;
@@ -614,7 +625,7 @@ impl Cpu {
             // PUSH DE
             0xD5 => { let v = self.de.reg(); self.push_word(mem, v); 16 }
             // SUB n
-            0xD6 => { let n = mem.read_byte(self.pc); self.pc += 1; self.sub_8bit(n, false); 8 }
+            0xD6 => { let n = mem.read_byte(self.pc); self.pc = self.pc.wrapping_add(1); self.sub_8bit(n, false); 8 }
             // RST 10H
             0xD7 => { self.push_word(mem, self.pc); self.pc = 0x10; 16 }
             // RET C
@@ -633,13 +644,13 @@ impl Cpu {
             }
             // JP C,nn
             0xDA => {
-                let nn = self.read_word(mem); self.pc += 2;
+                let nn = self.read_word(mem); self.pc = self.pc.wrapping_add(2);
                 if self.get_flag(FLAG_C) { self.pc = nn; return 16; }
                 12
             }
             // CALL C,nn
             0xDC => {
-                let nn = self.read_word(mem); self.pc += 2;
+                let nn = self.read_word(mem); self.pc = self.pc.wrapping_add(2);
                 if self.get_flag(FLAG_C) {
                     self.push_word(mem, self.pc);
                     self.pc = nn;
@@ -648,12 +659,12 @@ impl Cpu {
                 12
             }
             // SBC A,n
-            0xDE => { let n = mem.read_byte(self.pc); self.pc += 1; self.sub_8bit(n, true); 8 }
+            0xDE => { let n = mem.read_byte(self.pc); self.pc = self.pc.wrapping_add(1); self.sub_8bit(n, true); 8 }
             // RST 18H
             0xDF => { self.push_word(mem, self.pc); self.pc = 0x18; 16 }
             // LDH (n),A
             0xE0 => {
-                let n = mem.read_byte(self.pc); self.pc += 1;
+                let n = mem.read_byte(self.pc); self.pc = self.pc.wrapping_add(1);
                 mem.write_byte(0xFF00 + n as u16, self.af.hi());
                 12
             }
@@ -664,13 +675,13 @@ impl Cpu {
             // PUSH HL
             0xE5 => { let v = self.hl.reg(); self.push_word(mem, v); 16 }
             // AND n
-            0xE6 => { let n = mem.read_byte(self.pc); self.pc += 1; self.and_8bit(n); 8 }
+            0xE6 => { let n = mem.read_byte(self.pc); self.pc = self.pc.wrapping_add(1); self.and_8bit(n); 8 }
             // RST 20H
             0xE7 => { self.push_word(mem, self.pc); self.pc = 0x20; 16 }
             // ADD SP,n
             0xE8 => {
                 let n = mem.read_byte(self.pc) as i8 as i16;
-                self.pc += 1;
+                self.pc = self.pc.wrapping_add(1);
                 let sp = self.sp;
                 self.af.set_lo(0);
                 if (sp & 0xF) as i16 + (n & 0xF) > 0xF {
@@ -686,17 +697,17 @@ impl Cpu {
             0xE9 => { self.pc = self.hl.reg(); 4 }
             // LD (nn),A
             0xEA => {
-                let nn = self.read_word(mem); self.pc += 2;
+                let nn = self.read_word(mem); self.pc = self.pc.wrapping_add(2);
                 mem.write_byte(nn, self.af.hi());
                 16
             }
             // XOR n
-            0xEE => { let n = mem.read_byte(self.pc); self.pc += 1; self.xor_8bit(n); 8 }
+            0xEE => { let n = mem.read_byte(self.pc); self.pc = self.pc.wrapping_add(1); self.xor_8bit(n); 8 }
             // RST 28H
             0xEF => { self.push_word(mem, self.pc); self.pc = 0x28; 16 }
             // LDH A,(n)
             0xF0 => {
-                let n = mem.read_byte(self.pc); self.pc += 1;
+                let n = mem.read_byte(self.pc); self.pc = self.pc.wrapping_add(1);
                 let v = mem.read_byte(0xFF00 + n as u16);
                 self.af.set_hi(v);
                 12
@@ -714,17 +725,17 @@ impl Cpu {
                 8
             }
             // DI
-            0xF3 => { mem.pending_disable_interrupts = 2; 4 }
+            0xF3 => { mem.interrupt_master = false; mem.ei_pending = false; 4 }
             // PUSH AF
             0xF5 => { let v = self.af.reg(); self.push_word(mem, v); 16 }
             // OR n
-            0xF6 => { let n = mem.read_byte(self.pc); self.pc += 1; self.or_8bit(n); 8 }
+            0xF6 => { let n = mem.read_byte(self.pc); self.pc = self.pc.wrapping_add(1); self.or_8bit(n); 8 }
             // RST 30H
             0xF7 => { self.push_word(mem, self.pc); self.pc = 0x30; 16 }
             // LD HL,SP+n
             0xF8 => {
                 let n = mem.read_byte(self.pc) as i8 as i16;
-                self.pc += 1;
+                self.pc = self.pc.wrapping_add(1);
                 let sp = self.sp;
                 self.af.set_lo(0);
                 if (sp & 0xF) as i16 + (n & 0xF) > 0xF {
@@ -740,15 +751,15 @@ impl Cpu {
             0xF9 => { self.sp = self.hl.reg(); 8 }
             // LD A,(nn)
             0xFA => {
-                let nn = self.read_word(mem); self.pc += 2;
+                let nn = self.read_word(mem); self.pc = self.pc.wrapping_add(2);
                 let v = mem.read_byte(nn);
                 self.af.set_hi(v);
                 16
             }
             // EI
-            0xFB => { mem.pending_enable_interrupts = 2; 4 }
+            0xFB => { mem.ei_pending = true; 4 }
             // CP n
-            0xFE => { let n = mem.read_byte(self.pc); self.pc += 1; self.cp_8bit(n); 8 }
+            0xFE => { let n = mem.read_byte(self.pc); self.pc = self.pc.wrapping_add(1); self.cp_8bit(n); 8 }
             // RST 38H
             0xFF => { self.push_word(mem, self.pc); self.pc = 0x38; 16 }
 
