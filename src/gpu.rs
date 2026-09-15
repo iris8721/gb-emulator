@@ -9,6 +9,7 @@ pub enum Colour {
 pub struct Gpu {
     pub scanline_counter: i32,
     pub screen_data: [[[u8; 3]; 144]; 160],
+    pub bg_line: [u8; 160],
 }
 
 impl Gpu {
@@ -16,6 +17,7 @@ impl Gpu {
         Gpu {
             scanline_counter: 456,
             screen_data: [[[255; 3]; 144]; 160],
+            bg_line: [0; 160],
         }
     }
 

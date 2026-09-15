@@ -5,7 +5,7 @@ use crate::interrupts;
 use crate::memory::Memory;
 use crate::timer;
 
-const MAX_CYCLES: u32 = 69905;
+const MAX_CYCLES: u32 = 70224;
 
 pub struct Emulator {
     pub cpu: Cpu,
@@ -35,20 +35,18 @@ impl Emulator {
             cycles_this_update += cycles;
             self.update_timers(cycles);
             self.update_graphics(cycles);
-            self.do_interrupts();
 
-            // Handle pending interrupt enable/disable
-            if self.memory.pending_enable_interrupts > 0 {
-                self.memory.pending_enable_interrupts -= 1;
-                if self.memory.pending_enable_interrupts == 0 {
-                    self.memory.interrupt_master = true;
-                }
+            let cycles = self.do_interrupts();
+            if cycles > 0 {
+                cycles_this_update += cycles;
+                self.update_timers(cycles);
+                self.update_graphics(cycles);
             }
-            if self.memory.pending_disable_interrupts > 0 {
-                self.memory.pending_disable_interrupts -= 1;
-                if self.memory.pending_disable_interrupts == 0 {
-                    self.memory.interrupt_master = false;
-                }
+
+            // IME goes high after EI itself, so the next instruction always runs before dispatch
+            if self.memory.ei_pending {
+                self.memory.ei_pending = false;
+                self.memory.interrupt_master = true;
             }
         }
     }
@@ -56,7 +54,7 @@ impl Emulator {
     fn update_timers(&mut self, cycles: u32) {
         // Divider register
         self.memory.timer.divider_counter += cycles as i32;
-        if self.memory.timer.divider_counter >= 256 {
+        while self.memory.timer.divider_counter >= 256 {
             self.memory.timer.divider_counter -= 256;
             self.memory.rom[0xFF04] = self.memory.rom[0xFF04].wrapping_add(1);
         }
@@ -65,9 +63,9 @@ impl Emulator {
         if timer::Timer::is_clock_enabled(tmc) {
             self.memory.timer.timer_counter -= cycles as i32;
 
-            if self.memory.timer.timer_counter <= 0 {
+            while self.memory.timer.timer_counter <= 0 {
                 let freq = timer::Timer::get_clock_freq_from_byte(tmc);
-                self.memory.timer.set_clock_freq(freq);
+                self.memory.timer.timer_counter += timer::Timer::freq_for_code(freq);
 
                 let tima = self.memory.rom[timer::TIMA as usize];
                 if tima == 255 {
@@ -112,8 +110,7 @@ impl Emulator {
         if !Gpu::is_lcd_enabled(&self.memory.rom) {
             self.gpu.scanline_counter = 456;
             self.memory.rom[0xFF44] = 0;
-            status &= 0xFC;
-            status |= 0x01; // mode 1
+            status &= 0xF8; // mode 0, coincidence clear
             self.memory.rom[0xFF41] = status;
             return;
         }
@@ -149,11 +146,12 @@ impl Emulator {
             self.memory.request_interrupt(interrupts::LCD);
         }
 
-        // Coincidence flag
+        // Coincidence flag - interrupt only when it goes 0 -> 1
         let lyc = self.memory.rom[0xFF45];
+        let was_coincident = status & 0x04 != 0;
         if current_line == lyc {
             status |= 0x04;
-            if status & 0x40 != 0 {
+            if !was_coincident && status & 0x40 != 0 {
                 self.memory.request_interrupt(interrupts::LCD);
             }
         } else {
@@ -167,6 +165,12 @@ impl Emulator {
         let control = self.memory.rom[0xFF40];
         if control & 0x01 != 0 {
             self.render_tiles();
+        } else {
+            let y = self.memory.rom[0xFF44] as usize;
+            for px in 0..160 {
+                self.gpu.screen_data[px][y] = [255; 3];
+            }
+            self.gpu.bg_line = [0; 160];
         }
         if control & 0x02 != 0 {
             self.render_sprites();
@@ -193,29 +197,19 @@ impl Emulator {
             unsigned = false;
         }
 
-        let background_memory: u16 = if !using_window {
-            if lcd_control & 0x08 != 0 { 0x9C00 } else { 0x9800 }
-        } else {
-            if lcd_control & 0x40 != 0 { 0x9C00 } else { 0x9800 }
-        };
-
-        let y_pos: u8 = if !using_window {
-            scroll_y.wrapping_add(current_line)
-        } else {
-            current_line.wrapping_sub(window_y)
-        };
-
-        let tile_row: u16 = (y_pos as u16 / 8) * 32;
+        let background_map: u16 = if lcd_control & 0x08 != 0 { 0x9C00 } else { 0x9800 };
+        let window_map: u16 = if lcd_control & 0x40 != 0 { 0x9C00 } else { 0x9800 };
 
         for pixel in 0u8..160 {
-            let mut x_pos = pixel.wrapping_add(scroll_x);
+            let (x_pos, y_pos, map) = if using_window && pixel >= window_x {
+                (pixel - window_x, current_line - window_y, window_map)
+            } else {
+                (pixel.wrapping_add(scroll_x), scroll_y.wrapping_add(current_line), background_map)
+            };
 
-            if using_window && pixel >= window_x {
-                x_pos = pixel.wrapping_sub(window_x);
-            }
-
+            let tile_row: u16 = (y_pos as u16 / 8) * 32;
             let tile_col: u16 = (x_pos as u16) / 8;
-            let tile_addr = background_memory + tile_row + tile_col;
+            let tile_addr = map + tile_row + tile_col;
             let tile_num_raw = self.memory.read_byte(tile_addr);
 
             let tile_location: u16 = if unsigned {
@@ -239,9 +233,8 @@ impl Emulator {
             let final_y = current_line as usize;
             let px = pixel as usize;
             if final_y < 144 && px < 160 {
-                self.gpu.screen_data[px][final_y][0] = r;
-                self.gpu.screen_data[px][final_y][1] = g;
-                self.gpu.screen_data[px][final_y][2] = b;
+                self.gpu.screen_data[px][final_y] = [r, g, b];
+                self.gpu.bg_line[px] = colour_num;
             }
         }
     }
@@ -252,10 +245,27 @@ impl Emulator {
         let y_size: i32 = if use_8x16 { 16 } else { 8 };
         let current_line = self.memory.rom[0xFF44] as i32;
 
+        // First 10 sprites on the line in OAM order get drawn
+        let mut visible = [(0i32, 0u16); 10];
+        let mut count = 0;
         for sprite in 0..40u16 {
             let index = sprite * 4;
             let y_pos = self.memory.read_byte(0xFE00 + index) as i32 - 16;
-            let x_pos = self.memory.read_byte(0xFE00 + index + 1) as i32 - 8;
+            if current_line >= y_pos && current_line < (y_pos + y_size) {
+                let x_pos = self.memory.read_byte(0xFE00 + index + 1) as i32 - 8;
+                visible[count] = (x_pos, index);
+                count += 1;
+                if count == 10 {
+                    break;
+                }
+            }
+        }
+
+        // Lowest X wins, then lowest OAM index - draw the losers first
+        visible[..count].sort_unstable_by(|a, b| b.cmp(a));
+
+        for &(x_pos, index) in &visible[..count] {
+            let y_pos = self.memory.read_byte(0xFE00 + index) as i32 - 16;
             let tile_location = self.memory.read_byte(0xFE00 + index + 2);
             let attributes = self.memory.read_byte(0xFE00 + index + 3);
 
@@ -263,81 +273,66 @@ impl Emulator {
             let x_flip = attributes & 0x20 != 0;
             let priority = attributes & 0x80 != 0;
 
-            if current_line >= y_pos && current_line < (y_pos + y_size) {
-                let mut line = current_line - y_pos;
+            let mut line = current_line - y_pos;
+            if y_flip {
+                line = y_size - 1 - line;
+            }
 
-                if y_flip {
-                    line = y_size - 1 - line;
+            let tile = if use_8x16 { tile_location & 0xFE } else { tile_location };
+            let line = line as u16 * 2;
+            let data_addr = 0x8000u16 + (tile as u16) * 16 + line;
+            let data1 = self.memory.read_byte(data_addr);
+            let data2 = self.memory.read_byte(data_addr + 1);
+
+            for tile_pixel in (0..8i32).rev() {
+                let colour_bit = if x_flip {
+                    7 - tile_pixel
+                } else {
+                    tile_pixel
+                };
+
+                let colour_num = (((data2 >> colour_bit) & 1) << 1) | ((data1 >> colour_bit) & 1);
+
+                // Colour 0 is transparent
+                if colour_num == 0 {
+                    continue;
                 }
 
-                let line = line as u16 * 2;
-                let data_addr = 0x8000u16 + (tile_location as u16) * 16 + line;
-                let data1 = self.memory.read_byte(data_addr);
-                let data2 = self.memory.read_byte(data_addr + 1);
-
-                for tile_pixel in (0..8i32).rev() {
-                    let colour_bit = if x_flip {
-                        7 - tile_pixel
-                    } else {
-                        tile_pixel
-                    };
-
-                    let colour_num = (((data2 >> colour_bit) & 1) << 1) | ((data1 >> colour_bit) & 1);
-
-                    let palette_addr: u16 = if attributes & 0x10 != 0 { 0xFF49 } else { 0xFF48 };
-                    let col = Gpu::get_colour(colour_num, palette_addr, &self.memory.rom);
-
-                    if col == crate::gpu::Colour::White {
-                        continue;
-                    }
-
-                    let (r, g, b) = Gpu::colour_to_rgb(col);
-
-                    let x_pix = (7 - tile_pixel) as i32;
-                    let pixel_x = x_pos + x_pix;
-
-                    if current_line >= 0 && current_line < 144 && pixel_x >= 0 && pixel_x < 160 {
-                        // If priority set, only draw over white background
-                        if priority {
-                            let bg = &self.gpu.screen_data[pixel_x as usize][current_line as usize];
-                            if bg[0] != 255 || bg[1] != 255 || bg[2] != 255 {
-                                continue;
-                            }
-                        }
-                        self.gpu.screen_data[pixel_x as usize][current_line as usize] = [r, g, b];
-                    }
+                let pixel_x = x_pos + 7 - tile_pixel;
+                if pixel_x < 0 || pixel_x >= 160 {
+                    continue;
                 }
+
+                // If priority set, only draw over background colour 0
+                if priority && self.gpu.bg_line[pixel_x as usize] != 0 {
+                    continue;
+                }
+
+                let palette_addr: u16 = if attributes & 0x10 != 0 { 0xFF49 } else { 0xFF48 };
+                let col = Gpu::get_colour(colour_num, palette_addr, &self.memory.rom);
+                let (r, g, b) = Gpu::colour_to_rgb(col);
+
+                self.gpu.screen_data[pixel_x as usize][current_line as usize] = [r, g, b];
             }
         }
     }
 
-    fn do_interrupts(&mut self) {
-        // Check if halted - any pending interrupt wakes from halt
-        if self.memory.halted {
-            let req = self.memory.rom[0xFF0F];
-            let enabled = self.memory.rom[0xFFFF];
-            if req & enabled != 0 {
-                self.memory.halted = false;
-            }
-        }
-
-        if !self.memory.interrupt_master {
-            return;
-        }
-
+    fn do_interrupts(&mut self) -> u32 {
         let req = self.memory.rom[0xFF0F];
         let enabled = self.memory.rom[0xFFFF];
+        let pending = req & enabled & 0x1F;
 
-        if req == 0 {
-            return;
+        // Any pending enabled interrupt wakes from halt, even with IME off
+        if pending != 0 {
+            self.memory.halted = false;
         }
 
-        for i in 0u8..5 {
-            if (req >> i) & 1 == 1 && (enabled >> i) & 1 == 1 {
-                self.service_interrupt(i);
-                break;
-            }
+        if !self.memory.interrupt_master || pending == 0 {
+            return 0;
         }
+
+        self.service_interrupt(pending.trailing_zeros() as u8);
+        20
     }
 
     fn service_interrupt(&mut self, interrupt: u8) {

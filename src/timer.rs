@@ -1,7 +1,6 @@
 pub const TIMA: u16 = 0xFF05;
 pub const TMA: u16 = 0xFF06;
 pub const TMC: u16 = 0xFF07;
-const CLOCKSPEED: i32 = 4194304;
 
 pub struct Timer {
     pub timer_counter: i32,
@@ -25,13 +24,7 @@ impl Timer {
     }
 
     pub fn set_clock_freq(&mut self, freq: u8) {
-        match freq {
-            0 => self.timer_counter = 1024,
-            1 => self.timer_counter = 16,
-            2 => self.timer_counter = 64,
-            3 => self.timer_counter = 256,
-            _ => {}
-        }
+        self.timer_counter = Self::freq_for_code(freq);
     }
 
     pub fn freq_for_code(code: u8) -> i32 {
@@ -39,8 +32,7 @@ impl Timer {
             0 => 1024,
             1 => 16,
             2 => 64,
-            3 => 256,
-            _ => 1024,
+            _ => 256,
         }
     }
 }
