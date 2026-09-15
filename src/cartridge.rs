@@ -11,6 +11,7 @@ pub enum MbcType {
 pub struct Cartridge {
     pub data: Vec<u8>,
     pub mbc_type: MbcType,
+    pub rom_bank_count: u16,
     pub ram_bank_count: u8,
 }
 
@@ -31,23 +32,28 @@ impl Cartridge {
             }
         };
 
+        let rom_bank_count = 2u16 << data[0x148].min(8);
+
         let ram_bank_count = match data[0x149] {
             0 => 0,
             1 => 1,
             2 => 1,
             3 => 4,
             4 => 16,
+            5 => 8,
             _ => 0,
         };
 
-        // Pad to max cartridge size
-        let mut padded = vec![0u8; 0x200000];
-        let copy_len = data.len().min(0x200000);
-        padded[..copy_len].copy_from_slice(&data[..copy_len]);
+        // Pad to 2MB so every bank an MBC can select is in range
+        let mut padded = data;
+        if padded.len() < 0x200000 {
+            padded.resize(0x200000, 0);
+        }
 
         Ok(Cartridge {
             data: padded,
             mbc_type,
+            rom_bank_count,
             ram_bank_count,
         })
     }

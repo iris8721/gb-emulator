@@ -14,8 +14,8 @@ pub struct Memory {
     pub timer: Timer,
     pub interrupt_master: bool,
     pub halted: bool,
-    pub pending_enable_interrupts: i8,
-    pub pending_disable_interrupts: i8,
+    pub halt_bug: bool,
+    pub ei_pending: bool,
 }
 
 impl Memory {
@@ -32,8 +32,8 @@ impl Memory {
             timer: Timer::new(),
             interrupt_master: false,
             halted: false,
-            pending_enable_interrupts: 0,
-            pending_disable_interrupts: 0,
+            halt_bug: false,
+            ei_pending: false,
         };
 
         // Load first 0x8000 bytes of cartridge into ROM
@@ -83,13 +83,25 @@ impl Memory {
         // ROM bank area
         if (0x4000..=0x7FFF).contains(&addr) {
             let new_addr = addr - 0x4000;
-            return self.cartridge.data[new_addr + (self.current_rom_bank as usize) * 0x4000];
+            let bank = (self.current_rom_bank as u16 & (self.cartridge.rom_bank_count - 1)) as usize;
+            return self.cartridge.data[new_addr + bank * 0x4000];
         }
 
         // RAM bank area
         if (0xA000..=0xBFFF).contains(&addr) {
+            if !self.enable_ram {
+                return 0xFF;
+            }
+            if self.cartridge.mbc_type == MbcType::Mbc2 {
+                return 0xF0 | (self.ram_banks[addr & 0x1FF] & 0xF);
+            }
             let new_addr = addr - 0xA000;
             return self.ram_banks[new_addr + (self.current_ram_bank as usize) * 0x2000];
+        }
+
+        // Echo RAM
+        if (0xE000..0xFE00).contains(&addr) {
+            return self.rom[addr - 0x2000];
         }
 
         // Joypad register
@@ -111,28 +123,33 @@ impl Memory {
 
         // RAM bank area
         if (0xA000..0xC000).contains(&addr) {
-            if self.enable_ram {
-                let new_addr = addr - 0xA000;
-                self.ram_banks[new_addr + (self.current_ram_bank as usize) * 0x2000] = data;
+            if !self.enable_ram {
+                return;
             }
+            if self.cartridge.mbc_type == MbcType::Mbc2 {
+                self.ram_banks[addr & 0x1FF] = data & 0xF;
+                return;
+            }
+            let new_addr = addr - 0xA000;
+            self.ram_banks[new_addr + (self.current_ram_bank as usize) * 0x2000] = data;
             return;
         }
 
         // Echo RAM
         if (0xE000..0xFE00).contains(&addr) {
-            self.rom[addr] = data;
             self.rom[addr - 0x2000] = data;
             return;
         }
 
         // Restricted area
-        if (0xFEA0..0xFEFF).contains(&addr) {
+        if (0xFEA0..=0xFEFF).contains(&addr) {
             return;
         }
 
         // Divider register - always resets to 0
         if addr == 0xFF04 {
             self.rom[0xFF04] = 0;
+            self.timer.divider_counter = 0;
             return;
         }
 
@@ -153,6 +170,12 @@ impl Memory {
             return;
         }
 
+        // LCD status - low 3 bits are read only
+        if addr == 0xFF41 {
+            self.rom[0xFF41] = (self.rom[0xFF41] & 0x07) | (data & 0xF8);
+            return;
+        }
+
         // DMA transfer
         if addr == 0xFF46 {
             self.do_dma_transfer(data);
@@ -165,80 +188,56 @@ impl Memory {
 
     fn handle_banking(&mut self, address: u16, data: u8) {
         let addr = address as usize;
-        let mbc = self.cartridge.mbc_type;
 
-        // RAM enable
-        if addr < 0x2000 {
-            if mbc == MbcType::Mbc1 || mbc == MbcType::Mbc2 {
-                self.do_ram_bank_enable(address, data);
-            }
-        }
-        // ROM bank lower bits
-        else if (0x2000..0x4000).contains(&addr) {
-            if mbc == MbcType::Mbc1 || mbc == MbcType::Mbc2 {
-                self.do_change_lo_rom_bank(data);
-            }
-        }
-        // ROM bank upper bits or RAM bank
-        else if (0x4000..0x6000).contains(&addr) {
-            if mbc == MbcType::Mbc1 {
-                if self.rom_banking {
-                    self.do_change_hi_rom_bank(data);
+        match self.cartridge.mbc_type {
+            MbcType::None => {}
+            MbcType::Mbc2 => {
+                if addr >= 0x4000 {
+                    return;
+                }
+                if address & 0x100 == 0 {
+                    self.enable_ram = data & 0xF == 0xA;
                 } else {
-                    self.do_ram_bank_change(data);
+                    self.current_rom_bank = data & 0xF;
+                    if self.current_rom_bank == 0 {
+                        self.current_rom_bank = 1;
+                    }
                 }
             }
-        }
-        // ROM/RAM mode select
-        else if (0x6000..0x8000).contains(&addr) {
-            if mbc == MbcType::Mbc1 {
-                self.do_change_rom_ram_mode(data);
+            MbcType::Mbc1 => {
+                if addr < 0x2000 {
+                    self.enable_ram = data & 0xF == 0xA;
+                } else if addr < 0x4000 {
+                    self.do_change_lo_rom_bank(data);
+                } else if addr < 0x6000 {
+                    if self.rom_banking {
+                        self.do_change_hi_rom_bank(data);
+                    } else {
+                        self.do_ram_bank_change(data);
+                    }
+                } else {
+                    self.do_change_rom_ram_mode(data);
+                }
             }
-        }
-    }
-
-    fn do_ram_bank_enable(&mut self, address: u16, data: u8) {
-        if self.cartridge.mbc_type == MbcType::Mbc2 {
-            if (address >> 4) & 1 == 1 {
-                return;
-            }
-        }
-        let test = data & 0xF;
-        if test == 0xA {
-            self.enable_ram = true;
-        } else if test == 0x0 {
-            self.enable_ram = false;
         }
     }
 
     fn do_change_lo_rom_bank(&mut self, data: u8) {
-        if self.cartridge.mbc_type == MbcType::Mbc2 {
-            self.current_rom_bank = data & 0xF;
-            if self.current_rom_bank == 0 {
-                self.current_rom_bank = 1;
-            }
-            return;
-        }
-
-        let lower5 = data & 0x1F;
-        self.current_rom_bank &= 0xE0; // clear lower 5
-        self.current_rom_bank |= lower5;
-        if self.current_rom_bank == 0 {
-            self.current_rom_bank = 1;
+        self.current_rom_bank &= 0x60; // clear lower 5
+        self.current_rom_bank |= data & 0x1F;
+        if self.current_rom_bank & 0x1F == 0 {
+            self.current_rom_bank |= 1;
         }
     }
 
     fn do_change_hi_rom_bank(&mut self, data: u8) {
-        self.current_rom_bank &= 0x1F; // clear upper 3
-        let upper = data & 0xE0;
-        self.current_rom_bank |= upper;
-        if self.current_rom_bank == 0 {
-            self.current_rom_bank = 1;
-        }
+        self.current_rom_bank &= 0x1F; // clear upper 2
+        self.current_rom_bank |= (data & 0x03) << 5;
     }
 
     fn do_ram_bank_change(&mut self, data: u8) {
-        self.current_ram_bank = data & 0x3;
+        let banks = self.cartridge.ram_bank_count.clamp(1, 4);
+        self.current_ram_bank = (data & 0x3) % banks;
     }
 
     fn do_change_rom_ram_mode(&mut self, data: u8) {
